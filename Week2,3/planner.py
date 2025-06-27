@@ -1,13 +1,16 @@
 from langgraph.graph import StateGraph, END
-from typing import List, TypedDict, Annotated
+from typing import List, TypedDict, Annotated, Any
 import operator
-import openai
 import os
 from dotenv import load_dotenv
+import google.generativeai as genai
 
+# Load API key
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
 
+# State types
 class PlannerState(TypedDict):
     tasks: List[str]
 
@@ -16,68 +19,51 @@ class DeveloperState(TypedDict):
     logs: List[str]
 
 class OverallState(TypedDict):
-    planner: Annotated[PlannerState, operator.add]
-    developer: Annotated[DeveloperState, operator.add]
+    planner: Annotated[PlannerState, lambda x, y: {**x, **y}]
+    developer: Annotated[DeveloperState, lambda x, y: {**x, **y}]
+    logs: Annotated[List[str], operator.add]
 
-# Planner Agent Implementation
+# Planner Agent
 class PlannerAgent:
     def __init__(self):
         self.logs = []
     
-    def internal_search(self, query: str) -> List[str]:
-        """Mock internal knowledge base search"""
-        self.logs.append(f"🔍 Internal search: {query}")
-        return ["Analyze requirements", "Design solution", "Implement core logic"]
-    
-    def web_search(self, query: str) -> List[str]:
-        """Mock web search tool"""
-        self.logs.append(f"🌐 Web search: {query}")
-        return ["Best practices: LangGraph documentation", "Relevant examples: GitHub repos"]
-    
     def plan(self, task: str) -> List[str]:
-        """Generate 2-3 actionable steps using OpenAI"""
         self.logs.append(f"📝 Planning task: {task}")
-        
-        # Generate steps with OpenAI
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a task planner. Break the task into 2-3 actionable steps. Return only the steps as a bullet list."},
-                {"role": "user", "content": f"Task: {task}"}
-            ],
-            max_tokens=150
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            f"""You are a task planner. Break this task into 2-3 actionable steps.
+            Return ONLY the steps as a bullet list. Do not include any explanations.
+            
+            Task: {task}"""
         )
-        
-        steps_text = response.choices[0].message.content.strip()
-        steps = [line.strip('- ').strip() for line in steps_text.split('\n') if line.strip()]
+        steps_text = response.text.strip()
+        steps = [line.strip('-* ').strip() for line in steps_text.split('\n') if line.strip()]
         self.logs.append(f"Generated steps: {steps}")
         return steps[:3]
 
-# Developer Agent Implementation
+# Developer Agent
 class DeveloperAgent:
     def __init__(self):
         self.logs = []
     
     def apply_changes(self, steps: List[str]) -> List[str]:
-        """Apply code changes using OpenAI"""
         changes = []
         for step in steps:
             self.logs.append(f"⚙️ Applying: {step}")
-            
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a developer. Write code to implement the following step. Return only the code."},
-                    {"role": "user", "content": f"Step: {step}"}
-                ],
-                max_tokens=300
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(
+                f"""You are a developer. Write code to implement this step.
+                Return ONLY the code. Do not include explanations.
+                
+                Step: {step}"""
             )
-            
-            code = response.choices[0].message.content.strip()
+            code = response.text.strip()
             changes.append(code)
             self.logs.append(f"✅ Completed: {step}\nCode:\n{code}")
         return changes
 
+# Node functions
 def planner_node(state: OverallState) -> dict:
     planner = PlannerAgent()
     task = state['planner']['tasks'][0]
@@ -98,6 +84,7 @@ def developer_node(state: OverallState) -> dict:
         }
     }
 
+# Build and run the graph
 graph = StateGraph(OverallState)
 graph.add_node("planner", planner_node)
 graph.add_node("developer", developer_node)
@@ -107,8 +94,9 @@ graph.add_edge("developer", END)
 app = graph.compile()
 
 initial_state = OverallState(
-    planner={"tasks": ["Create LangGraph agents with OpenAI integration"]},
-    developer={"changes": [], "logs": []}
+    planner={"tasks": ["Create LangGraph agents with Gemini integration"]},
+    developer={"changes": [], "logs": []},
+    logs=[]
 )
 result = app.invoke(initial_state)
 
